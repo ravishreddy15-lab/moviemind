@@ -8,6 +8,7 @@ using a trained MovieRecommender model.
 import json
 import pickle as _pickle
 import random
+import re
 import logging
 from pathlib import Path
 from typing import Optional
@@ -507,18 +508,28 @@ def search_movies(
         raise HTTPException(status_code=503, detail="Movie data not available")
 
     q_lower = q.strip().lower()
+    if not q_lower:
+        return {"movies": [], "total": 0}
+    stop_words = {"the", "a", "an", "of", "and", "or", "in", "on", "at", "to", "for", "is", "it", "as", "by", "with"}
+    all_words = q_lower.split()
+    meaningful_words = [w for w in all_words if w not in stop_words]
+    if not meaningful_words:
+        meaningful_words = all_words
+
+    def word_match(text, word):
+        return bool(re.search(r'(?<![a-zA-Z])' + re.escape(word) + r'(?![a-zA-Z])', text))
+
+    def all_words_in_title(words_list, title):
+        return all(word_match(title, w) for w in words_list)
+
     filtered = []
     for m in movies_cache:
         title = m.get("title", "").lower()
-        description = m.get("description", "").lower()
+
         movie_genres = [g.lower() for g in m.get("genre", [])]
         rating = m.get("rating", 0.0)
         year = m.get("year", 0)
 
-        if q_lower and q_lower not in title and q_lower not in description:
-            words = q_lower.split()
-            if not any(w in title or w in description for w in words if len(w) > 2):
-                continue
         if genre and genre.lower() not in movie_genres:
             continue
         if rating < min_rating:
@@ -527,13 +538,20 @@ def search_movies(
             continue
 
         score = 0.0
-        if q_lower:
-            if q_lower in title:
-                score = 1.0
-            elif any(w in title for w in words if len(w) > 2):
-                score = 0.5
-            elif any(w in description for w in words if len(w) > 2):
-                score = 0.3
+        if q_lower in title:
+            score = 1.0
+        elif word_match(title, " ".join(meaningful_words)):
+            score = 0.95
+        elif len(meaningful_words) == 1:
+            if word_match(title, meaningful_words[0]):
+                score = 0.6
+            else:
+                continue
+        elif all_words_in_title(meaningful_words, title):
+            score = 0.7
+        else:
+            continue
+
         filtered.append((m, score))
 
     if sort_by == "rating":
@@ -545,7 +563,7 @@ def search_movies(
     else:
         filtered.sort(key=lambda x: x[1], reverse=True)
 
-    movies = [m for m, _ in filtered]
+    movies = [m for m, _ in filtered[:100]]
     return {"movies": movies, "total": len(movies)}
 
 
