@@ -44,6 +44,8 @@ app.add_middleware(
 
 recommender = None
 movies_df: Optional[pd.DataFrame] = None
+movies_cache: list[dict] = []
+movies_by_id: dict[str, dict] = {}
 
 
 def load_model():
@@ -86,6 +88,12 @@ def load_model():
         except Exception as e2:
             logger.error(f"Failed to load movies JSON: {e2}")
             movies_df = pd.DataFrame()
+
+    global movies_cache, movies_by_id
+    if movies_df is not None and not movies_df.empty:
+        movies_cache = [movie_to_dict(row) for _, row in movies_df.iterrows()]
+        movies_by_id = {m["id"]: m for m in movies_cache}
+        logger.info(f"Cached {len(movies_cache)} movies.")
 
 
 @app.on_event("startup")
@@ -369,18 +377,13 @@ def health_check():
 
 @app.get("/api/genres")
 def get_genres():
-    if movies_df is None or movies_df.empty:
+    if not movies_cache:
         return {"genres": []}
     all_genres = set()
-    for genres in movies_df["genre"]:
-        if isinstance(genres, list):
-            for g in genres:
-                if isinstance(g, str) and g.strip():
-                    all_genres.add(g.strip())
-        elif isinstance(genres, str):
-            for g in genres.split(","):
-                if g.strip():
-                    all_genres.add(g.strip())
+    for m in movies_cache:
+        for g in m.get("genre", []):
+            if g:
+                all_genres.add(g)
     return {"genres": sorted(all_genres)}
 
 
@@ -389,28 +392,24 @@ def get_movies(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
 ):
-    if movies_df is None or movies_df.empty:
+    if not movies_cache:
         raise HTTPException(status_code=503, detail="Movie data not available")
 
-    total = len(movies_df)
+    total = len(movies_cache)
     start = (page - 1) * limit
     end = min(start + limit, total)
-    page_df = movies_df.iloc[start:end]
-
-    movies = [movie_to_dict(row) for _, row in page_df.iterrows()]
-    return {"movies": movies, "total": total, "page": page, "limit": limit}
+    return {"movies": movies_cache[start:end], "total": total, "page": page, "limit": limit}
 
 
 @app.get("/api/movies/{movie_id}")
 def get_movie(movie_id: str):
-    if movies_df is None or movies_df.empty:
+    if not movies_by_id:
         raise HTTPException(status_code=503, detail="Movie data not available")
 
-    match = movies_df[movies_df["id"] == movie_id]
-    if match.empty:
+    movie = movies_by_id.get(movie_id)
+    if not movie:
         raise HTTPException(status_code=404, detail=f"Movie '{movie_id}' not found")
-
-    return {"movie": movie_to_dict(match.iloc[0])}
+    return {"movie": movie}
 
 
 @app.get("/api/movies/{movie_id}/similar")
@@ -418,56 +417,52 @@ def get_similar_movies(
     movie_id: str,
     limit: int = Query(10, ge=1, le=50),
 ):
-    if movies_df is None or movies_df.empty:
+    if not movies_by_id:
         raise HTTPException(status_code=503, detail="Movie data not available")
 
-    match = movies_df[movies_df["id"] == movie_id]
-    if match.empty:
+    source = movies_by_id.get(movie_id)
+    if not source:
         raise HTTPException(status_code=404, detail=f"Movie '{movie_id}' not found")
 
-    movie_idx = match.index[0]
-
-    if recommender is not None:
+    if recommender is not None and movies_df is not None:
         try:
-            similar = recommender.get_similar(movie_idx, top_n=limit)
-            results = []
-            for idx, score in similar:
-                if idx < len(movies_df):
-                    m = movie_to_dict(movies_df.iloc[idx])
-                    match_pct = min(99, max(78, int(score * 100)))
-                    reason = build_text_reason(
-                        movies_df.iloc[match.index[0]]["title"], m, score
-                    )
-                    results.append({
-                        "movie": m,
-                        "match_percentage": match_pct,
-                        "reason": reason,
-                    })
-            return {"recommendations": results}
+            match = movies_df[movies_df["id"] == movie_id]
+            if not match.empty:
+                movie_idx = match.index[0]
+                similar = recommender.get_similar(movie_idx, top_n=limit)
+                results = []
+                for idx, score in similar:
+                    if idx < len(movies_cache):
+                        m = movies_cache[idx]
+                        match_pct = min(99, max(78, int(score * 100)))
+                        reason = build_text_reason(source["title"], m, score)
+                        results.append({
+                            "movie": m,
+                            "match_percentage": match_pct,
+                            "reason": reason,
+                        })
+                return {"recommendations": results}
         except Exception as e:
             logger.error(f"get_similar failed: {e}")
 
-    row = match.iloc[0]
-    movie_genres = set(row.get("genre", []) if isinstance(row.get("genre", []), list) else [])
-    year = row.get("year", 2000)
+    source_genres = set(source.get("genre", []))
+    source_year = source.get("year", 2000)
     candidates = []
-    for idx, other in movies_df.iterrows():
-        if idx == movie_idx:
+    for m in movies_cache:
+        if m["id"] == movie_id:
             continue
-        other_genres = set(other.get("genre", []) if isinstance(other.get("genre", []), list) else [])
-        genre_overlap = len(movie_genres & other_genres)
-        year_diff = abs(other.get("year", 2000) - year)
+        other_genres = set(m.get("genre", []))
+        genre_overlap = len(source_genres & other_genres)
+        year_diff = abs(m.get("year", 2000) - source_year)
         sim = genre_overlap * 0.3 + (1.0 / (1.0 + year_diff * 0.05)) * 0.2
-        candidates.append((idx, sim))
+        if sim > 0:
+            candidates.append((m, sim))
     candidates.sort(key=lambda x: x[1], reverse=True)
 
     results = []
-    for idx, score in candidates[:limit]:
-        m = movie_to_dict(movies_df.iloc[idx])
+    for m, score in candidates[:limit]:
         match_pct = min(99, max(78, int(score * 100)))
-        reason = build_text_reason(
-            row["title"], m, score
-        )
+        reason = build_text_reason(source["title"], m, score)
         results.append({
             "movie": m,
             "match_percentage": match_pct,
@@ -481,50 +476,22 @@ def get_similar_movies(
 def get_trending(
     limit: int = Query(20, ge=1, le=50),
 ):
-    if movies_df is None or movies_df.empty:
+    if not movies_cache:
         raise HTTPException(status_code=503, detail="Movie data not available")
 
-    if recommender is not None:
-        try:
-            trending = recommender.get_trending(top_n=limit)
-            results = []
-            for idx, score in trending:
-                if idx < len(movies_df):
-                    m = movie_to_dict(movies_df.iloc[idx])
-                    results.append(m)
-            return {"movies": results}
-        except Exception as e:
-            logger.error(f"get_trending failed: {e}")
-
-    sorted_df = movies_df.sort_values(
-        by=["votes", "rating"], ascending=[False, False]
-    ).head(limit)
-    movies = [movie_to_dict(row) for _, row in sorted_df.iterrows()]
-    return {"movies": movies}
+    sorted_movies = sorted(movies_cache, key=lambda m: (m.get("votes", 0), m.get("rating", 0)), reverse=True)
+    return {"movies": sorted_movies[:limit]}
 
 
 @app.get("/api/top-rated")
 def get_top_rated(
     limit: int = Query(20, ge=1, le=50),
 ):
-    if movies_df is None or movies_df.empty:
+    if not movies_cache:
         raise HTTPException(status_code=503, detail="Movie data not available")
 
-    if recommender is not None:
-        try:
-            top = recommender.get_top_rated(top_n=limit)
-            results = []
-            for idx, score in top:
-                if idx < len(movies_df):
-                    m = movie_to_dict(movies_df.iloc[idx])
-                    results.append(m)
-            return {"movies": results}
-        except Exception as e:
-            logger.error(f"get_top_rated failed: {e}")
-
-    sorted_df = movies_df.sort_values(by=["rating"], ascending=False).head(limit)
-    movies = [movie_to_dict(row) for _, row in sorted_df.iterrows()]
-    return {"movies": movies}
+    sorted_movies = sorted(movies_cache, key=lambda m: m.get("rating", 0), reverse=True)
+    return {"movies": sorted_movies[:limit]}
 
 
 @app.get("/api/search")
@@ -536,58 +503,49 @@ def search_movies(
     year_to: int = Query(2030, le=2030),
     sort_by: str = Query("relevance", description="Sort by: relevance, rating, year, votes"),
 ):
-    if movies_df is None or movies_df.empty:
+    if not movies_cache:
         raise HTTPException(status_code=503, detail="Movie data not available")
 
-    if recommender is not None and q.strip():
-        try:
-            results = recommender.search_movies(q, top_n=200)
-            result_indices = [idx for idx, _ in results]
-            result_scores = {idx: score for idx, score in results}
-        except Exception as e:
-            logger.error(f"search_movies failed: {e}")
-            result_indices = list(movies_df.index)
-            result_scores = {i: 0.0 for i in result_indices}
-    else:
-        result_indices = list(movies_df.index)
-        result_scores = {i: 0.0 for i in result_indices}
-
+    q_lower = q.strip().lower()
     filtered = []
-    for idx in result_indices:
-        row = movies_df.iloc[idx]
-        movie_genres = row.get("genre", [])
-        if isinstance(movie_genres, str):
-            movie_genres = [g.strip() for g in movie_genres.split(",")]
-        rating = row.get("rating", 0.0)
-        if isinstance(rating, str):
-            try:
-                rating = float(rating)
-            except (ValueError, TypeError):
-                rating = 0.0
-        year = row.get("year", 0)
-        if isinstance(year, str):
-            import re
-            m = re.search(r"(\d{4})", year)
-            year = int(m.group(1)) if m else 0
+    for m in movies_cache:
+        title = m.get("title", "").lower()
+        description = m.get("description", "").lower()
+        movie_genres = [g.lower() for g in m.get("genre", [])]
+        rating = m.get("rating", 0.0)
+        year = m.get("year", 0)
 
-        if genre and genre.lower() not in [g.lower() for g in movie_genres]:
+        if q_lower and q_lower not in title and q_lower not in description:
+            words = q_lower.split()
+            if not any(w in title or w in description for w in words if len(w) > 2):
+                continue
+        if genre and genre.lower() not in movie_genres:
             continue
         if rating < min_rating:
             continue
         if year < year_from or year > year_to:
             continue
-        filtered.append((idx, result_scores.get(idx, 0.0)))
+
+        score = 0.0
+        if q_lower:
+            if q_lower in title:
+                score = 1.0
+            elif any(w in title for w in words if len(w) > 2):
+                score = 0.5
+            elif any(w in description for w in words if len(w) > 2):
+                score = 0.3
+        filtered.append((m, score))
 
     if sort_by == "rating":
-        filtered.sort(key=lambda x: movies_df.iloc[x[0]].get("rating", 0), reverse=True)
+        filtered.sort(key=lambda x: x[0].get("rating", 0), reverse=True)
     elif sort_by == "year":
-        filtered.sort(key=lambda x: movies_df.iloc[x[0]].get("year", 0), reverse=True)
+        filtered.sort(key=lambda x: x[0].get("year", 0), reverse=True)
     elif sort_by == "votes":
-        filtered.sort(key=lambda x: movies_df.iloc[x[0]].get("votes", 0), reverse=True)
+        filtered.sort(key=lambda x: x[0].get("votes", 0), reverse=True)
     else:
         filtered.sort(key=lambda x: x[1], reverse=True)
 
-    movies = [movie_to_dict(movies_df.iloc[idx]) for idx, _ in filtered]
+    movies = [m for m, _ in filtered]
     return {"movies": movies, "total": len(movies)}
 
 
@@ -666,8 +624,8 @@ def recommend(request: RecommendRequest):
             )
             results = []
             for idx, score in recs:
-                if idx < len(movies_df):
-                    m = movie_to_dict(movies_df.iloc[idx])
+                if idx < len(movies_cache):
+                    m = movies_cache[idx]
                     match_pct = min(99, max(78, int(score * 100)))
                     reason = build_text_reason(query_text, m, score)
                     if request.favorite_actor:
@@ -690,8 +648,7 @@ def recommend(request: RecommendRequest):
             logger.error(f"Recommend endpoint failed: {e}")
 
     results = []
-    for _, row in movies_df.iterrows():
-        m = movie_to_dict(row)
+    for m in movies_cache:
         score = 0.5
         movie_genres = set(m.get("genre", []))
         if request.genres:
@@ -841,8 +798,8 @@ def quiz_recommend(request: QuizRecommendRequest):
             results = []
             seen_titles = set()
             for idx, score in recs:
-                if idx < len(movies_df):
-                    m = movie_to_dict(movies_df.iloc[idx])
+                if idx < len(movies_cache):
+                    m = movies_cache[idx]
                     if m["title"] in seen_titles:
                         continue
                     seen_titles.add(m["title"])
@@ -858,8 +815,7 @@ def quiz_recommend(request: QuizRecommendRequest):
             logger.error(f"Quiz recommend failed: {e}")
 
     candidates = []
-    for _, row in movies_df.iterrows():
-        m = movie_to_dict(row)
+    for m in movies_cache:
         score = 0.4
         movie_genres = set(m.get("genre", []))
         if genres:
