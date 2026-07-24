@@ -6,6 +6,7 @@ using a trained MovieRecommender model.
 """
 
 import json
+import os
 import pickle as _pickle
 import random
 import re
@@ -33,7 +34,7 @@ MODEL_PATH = BASE_DIR / "models" / "recommender.pkl"
 MOVIES_JSON_PATH = BASE_DIR / "data" / "movies.json"
 POSTER_CACHE_PATH = BASE_DIR / "data" / "poster_cache.json"
 
-TMDB_API_KEY = "60b1315b3031dc9c8091011a927d17e3"
+TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "60b1315b3031dc9c8091011a927d17e3")
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMG_BASE = "https://image.tmdb.org/t/p/w500"
 
