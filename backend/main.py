@@ -10,6 +10,9 @@ import pickle as _pickle
 import random
 import re
 import logging
+import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +31,11 @@ PROJECT_ROOT = BASE_DIR.parent
 DIST_DIR = PROJECT_ROOT / "dist"
 MODEL_PATH = BASE_DIR / "models" / "recommender.pkl"
 MOVIES_JSON_PATH = BASE_DIR / "data" / "movies.json"
+POSTER_CACHE_PATH = BASE_DIR / "data" / "poster_cache.json"
+
+TMDB_API_KEY = "60b1315b3031dc9c8091011a927d17e3"
+TMDB_BASE_URL = "https://api.themoviedb.org/3"
+TMDB_IMG_BASE = "https://image.tmdb.org/t/p/w500"
 
 app = FastAPI(
     title="MovieMind AI API",
@@ -47,6 +55,115 @@ recommender = None
 movies_df: Optional[pd.DataFrame] = None
 movies_cache: list[dict] = []
 movies_by_id: dict[str, dict] = {}
+poster_cache: dict[str, str] = {}
+
+
+def _tmdb_curl(url: str) -> dict:
+    try:
+        try:
+            import requests as _req
+            resp = _req.get(url, timeout=10, headers={"Accept": "application/json"})
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+        import urllib.parse as _up
+        result = subprocess.run(
+            ["curl.exe", "-s", "--max-time", "10", url],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout)
+    except Exception:
+        pass
+    return {}
+
+
+def _tmdb_search(title: str, year: int = 0) -> str:
+    import urllib.parse as _up
+    params = _up.urlencode({"api_key": TMDB_API_KEY, "query": title, "include_adult": "false"})
+    data = _tmdb_curl(f"{TMDB_BASE_URL}/search/movie?{params}")
+    results = data.get("results", [])
+    if not results:
+        return ""
+    if year:
+        for r in results:
+            r_year = int(str(r.get("release_date", "0000"))[:4] or 0)
+            if abs(r_year - year) <= 1:
+                return r.get("poster_path", "") or ""
+    return results[0].get("poster_path", "") or ""
+
+
+def _tmdb_search_tv(title: str) -> str:
+    import urllib.parse as _up
+    params = _up.urlencode({"api_key": TMDB_API_KEY, "query": title, "include_adult": "false"})
+    data = _tmdb_curl(f"{TMDB_BASE_URL}/search/tv?{params}")
+    results = data.get("results", [])
+    if results:
+        return results[0].get("poster_path", "") or ""
+    return ""
+
+
+def load_poster_cache():
+    global poster_cache
+    try:
+        if POSTER_CACHE_PATH.exists():
+            with open(POSTER_CACHE_PATH, "r", encoding="utf-8-sig") as f:
+                poster_cache = json.load(f)
+            logger.info(f"Loaded {len(poster_cache)} cached posters.")
+    except Exception as e:
+        logger.error(f"Failed to load poster cache: {e}")
+        poster_cache = {}
+
+
+def save_poster_cache():
+    try:
+        POSTER_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(POSTER_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(poster_cache, f)
+        logger.info(f"Saved {len(poster_cache)} poster cache entries.")
+    except Exception as e:
+        logger.error(f"Failed to save poster cache: {e}")
+
+
+def _fetch_posters_background():
+    global poster_cache
+    time.sleep(2)
+    movies_to_fetch = []
+    for m in movies_cache:
+        title = m.get("title", "")
+        if title and title not in poster_cache:
+            movies_to_fetch.append(m)
+    if not movies_to_fetch:
+        logger.info("All posters already cached.")
+        return
+    logger.info(f"Fetching posters for {len(movies_to_fetch)} movies...")
+    fetched = 0
+    for i, m in enumerate(movies_to_fetch):
+        title = m.get("title", "")
+        year = m.get("year", 0)
+        poster_path = _tmdb_search(title, year)
+        if not poster_path:
+            poster_path = _tmdb_search_tv(title)
+        if poster_path:
+            poster_cache[title] = f"{TMDB_IMG_BASE}{poster_path}"
+        else:
+            poster_cache[title] = ""
+        fetched += 1
+        if fetched % 50 == 0:
+            save_poster_cache()
+            logger.info(f"Poster progress: {fetched}/{len(movies_to_fetch)}")
+        time.sleep(0.15)
+    save_poster_cache()
+    logger.info(f"Poster fetching complete. {sum(1 for v in poster_cache.values() if v)} posters found.")
+    for m in movies_cache:
+        title = m.get("title", "")
+        if title in poster_cache and poster_cache[title]:
+            m["poster"] = poster_cache[title]
+    for mid, m in movies_by_id.items():
+        title = m.get("title", "")
+        if title in poster_cache and poster_cache[title]:
+            m["poster"] = poster_cache[title]
 
 
 def load_model():
@@ -100,6 +217,19 @@ def load_model():
 @app.on_event("startup")
 def startup_event():
     load_model()
+    load_poster_cache()
+    if movies_cache:
+        for m in movies_cache:
+            title = m.get("title", "")
+            if title in poster_cache and poster_cache[title]:
+                m["poster"] = poster_cache[title]
+        for mid, m in movies_by_id.items():
+            title = m.get("title", "")
+            if title in poster_cache and poster_cache[title]:
+                m["poster"] = poster_cache[title]
+    missing = sum(1 for m in movies_cache if not m.get("poster", "").startswith("https://"))
+    if missing > 0:
+        threading.Thread(target=_fetch_posters_background, daemon=True).start()
 
 
 def movie_to_dict(row) -> dict:
@@ -194,7 +324,9 @@ def movie_to_dict(row) -> dict:
     if description == "nan":
         description = ""
 
-    poster_url = f"https://placehold.co/400x600/18181B/A78BFA?text={_re.sub(r'[^a-zA-Z0-9]', '+', title[:20])}&font=roboto"
+    poster_url = poster_cache.get(title, "")
+    if not poster_url:
+        poster_url = f"https://placehold.co/400x600/18181B/A78BFA?text={_re.sub(r'[^a-zA-Z0-9]', '+', title[:20])}&font=roboto"
 
     return {
         "id": movie_id,
@@ -508,13 +640,9 @@ def search_movies(
         raise HTTPException(status_code=503, detail="Movie data not available")
 
     q_lower = q.strip().lower()
-    if not q_lower:
+
+    if not q_lower and not genre and min_rating <= 0.0 and year_from <= 1900 and year_to >= 2030:
         return {"movies": [], "total": 0}
-    stop_words = {"the", "a", "an", "of", "and", "or", "in", "on", "at", "to", "for", "is", "it", "as", "by", "with"}
-    all_words = q_lower.split()
-    meaningful_words = [w for w in all_words if w not in stop_words]
-    if not meaningful_words:
-        meaningful_words = all_words
 
     def word_match(text, word):
         return bool(re.search(r'(?<![a-zA-Z])' + re.escape(word) + r'(?![a-zA-Z])', text))
@@ -522,10 +650,10 @@ def search_movies(
     def all_words_in_title(words_list, title):
         return all(word_match(title, w) for w in words_list)
 
+    stop_words = {"the", "a", "an", "of", "and", "or", "in", "on", "at", "to", "for", "is", "it", "as", "by", "with"}
+
     filtered = []
     for m in movies_cache:
-        title = m.get("title", "").lower()
-
         movie_genres = [g.lower() for g in m.get("genre", [])]
         rating = m.get("rating", 0.0)
         year = m.get("year", 0)
@@ -536,6 +664,16 @@ def search_movies(
             continue
         if year < year_from or year > year_to:
             continue
+
+        if not q_lower:
+            filtered.append((m, 0.0))
+            continue
+
+        title = m.get("title", "").lower()
+        all_words = q_lower.split()
+        meaningful_words = [w for w in all_words if w not in stop_words]
+        if not meaningful_words:
+            meaningful_words = all_words
 
         score = 0.0
         if q_lower in title:
@@ -553,6 +691,9 @@ def search_movies(
             continue
 
         filtered.append((m, score))
+
+    if not q_lower and sort_by == "relevance":
+        sort_by = "rating"
 
     if sort_by == "rating":
         filtered.sort(key=lambda x: x[0].get("rating", 0), reverse=True)
