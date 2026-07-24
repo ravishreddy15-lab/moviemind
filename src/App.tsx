@@ -1,5 +1,6 @@
 import { Routes, Route, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
+import { useEffect } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import MainLayout from "@/layouts/MainLayout";
 import HomePage from "@/pages/HomePage";
@@ -17,6 +18,14 @@ const pageVariants = {
   animate: { opacity: 1, y: 0, transition: { duration: 0.35, ease: "easeOut" } },
   exit: { opacity: 0, y: -12, transition: { duration: 0.2, ease: "easeIn" } },
 };
+
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
+  return null;
+}
 
 function AnimatedPage({ children }: { children: React.ReactNode }) {
   return (
@@ -37,6 +46,7 @@ export default function App() {
 
   return (
     <TooltipProvider delayDuration={300}>
+      <ScrollToTop />
       <Routes location={location} key={location.pathname}>
         <Route element={<MainLayout />}>
           <Route index element={<AnimatedPage><HomePage /></AnimatedPage>} />
