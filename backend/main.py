@@ -642,7 +642,8 @@ def search_movies(
     q_lower = q.strip().lower()
 
     if not q_lower and not genre and min_rating <= 0.0 and year_from <= 1900 and year_to >= 2030:
-        return {"movies": [], "total": 0}
+        top = sorted(movies_cache, key=lambda x: x.get("rating", 0), reverse=True)[:100]
+        return {"movies": top, "total": len(movies_cache)}
 
     def word_match(text, word):
         return bool(re.search(r'(?<![a-zA-Z])' + re.escape(word) + r'(?![a-zA-Z])', text))
