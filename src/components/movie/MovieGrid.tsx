@@ -1,4 +1,3 @@
-import { motion } from "framer-motion";
 import type { Movie } from "@/utils/api";
 import MovieCard from "./MovieCard";
 
@@ -7,31 +6,12 @@ interface MovieGridProps {
   loading?: boolean;
 }
 
-const container = {
-  hidden: { opacity: 0 },
-  show: {
-    opacity: 1,
-    transition: {
-      staggerChildren: 0.05,
-    },
-  },
-};
-
-const item = {
-  hidden: { opacity: 0, y: 20 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: "easeOut" } },
-};
-
 export default function MovieGrid({ movies, loading = false }: MovieGridProps) {
   if (loading) {
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
         {Array.from({ length: 8 }).map((_, i) => (
-          <div
-            key={i}
-            className="rounded-xl bg-zinc-800 animate-pulse h-80"
-            aria-hidden="true"
-          />
+          <div key={i} className="rounded-xl bg-zinc-800 animate-pulse h-80" aria-hidden="true" />
         ))}
       </div>
     );
@@ -47,17 +27,12 @@ export default function MovieGrid({ movies, loading = false }: MovieGridProps) {
   }
 
   return (
-    <motion.div
-      variants={container}
-      initial="hidden"
-      animate="show"
-      className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6"
-    >
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
       {movies.map((movie) => (
-        <motion.div key={movie.id} variants={item}>
+        <div key={movie.id} className="animate-fade-in-up">
           <MovieCard movie={movie} />
-        </motion.div>
+        </div>
       ))}
-    </motion.div>
+    </div>
   );
 }

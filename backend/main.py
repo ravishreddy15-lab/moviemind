@@ -24,6 +24,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+import sys as _sys_backend
+_backend_dir_str = str(Path(__file__).resolve().parent)
+if _backend_dir_str not in _sys_backend.path:
+    _sys_backend.path.insert(0, _backend_dir_str)
+from chat_engine import MovieChatEngine
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -33,6 +39,7 @@ DIST_DIR = PROJECT_ROOT / "dist"
 MODEL_PATH = BASE_DIR / "models" / "recommender.pkl"
 MOVIES_JSON_PATH = BASE_DIR / "data" / "movies.json"
 POSTER_CACHE_PATH = BASE_DIR / "data" / "poster_cache.json"
+STREAMING_CACHE_PATH = BASE_DIR / "data" / "streaming_cache.json"
 
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "60b1315b3031dc9c8091011a927d17e3")
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
@@ -57,26 +64,49 @@ movies_df: Optional[pd.DataFrame] = None
 movies_cache: list[dict] = []
 movies_by_id: dict[str, dict] = {}
 poster_cache: dict[str, str] = {}
+chat_engine: Optional[MovieChatEngine] = None
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[dict] = Field(default_factory=list)
+
+
+class MoodArc(BaseModel):
+    moods: list[str]
+    movies_per_mood: int = 2
+
+
+class StreamingInfo(BaseModel):
+    platform: str
+    type: str
+    url: str
 
 
 def _tmdb_curl(url: str) -> dict:
-    try:
+    import time as _time
+    for attempt in range(3):
         try:
-            import requests as _req
-            resp = _req.get(url, timeout=10, headers={"Accept": "application/json"})
-            if resp.status_code == 200:
-                return resp.json()
+            try:
+                import requests as _req
+                resp = _req.get(url, timeout=10, headers={"Accept": "application/json"})
+                if resp.status_code == 200:
+                    return resp.json()
+                if resp.status_code == 429:
+                    _time.sleep(1 * (attempt + 1))
+                    continue
+            except Exception:
+                pass
+            import urllib.parse as _up
+            result = subprocess.run(
+                ["curl.exe", "-s", "--max-time", "10", url],
+                capture_output=True, text=True, timeout=15, encoding="utf-8"
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return json.loads(result.stdout)
         except Exception:
             pass
-        import urllib.parse as _up
-        result = subprocess.run(
-            ["curl.exe", "-s", "--max-time", "10", url],
-            capture_output=True, text=True, timeout=15
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return json.loads(result.stdout)
-    except Exception:
-        pass
+        _time.sleep(1 * (attempt + 1))
     return {}
 
 
@@ -167,6 +197,72 @@ def _fetch_posters_background():
             m["poster"] = poster_cache[title]
 
 
+def load_streaming_cache():
+    global _streaming_cache
+    try:
+        if STREAMING_CACHE_PATH.exists():
+            with open(STREAMING_CACHE_PATH, "r", encoding="utf-8-sig") as f:
+                _streaming_cache = json.load(f)
+            logger.info(f"Loaded {len(_streaming_cache)} cached streaming entries.")
+    except Exception as e:
+        logger.error(f"Failed to load streaming cache: {e}")
+        _streaming_cache = {}
+
+
+def save_streaming_cache():
+    try:
+        STREAMING_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(STREAMING_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_streaming_cache, f)
+    except Exception as e:
+        logger.error(f"Failed to save streaming cache: {e}")
+
+
+def _prefetch_streaming_background():
+    time.sleep(5)
+    top_movies = sorted(movies_cache, key=lambda m: m.get("rating", 0) or 0, reverse=True)[:200]
+    to_fetch = [m for m in top_movies if m.get("id", "") not in _streaming_cache]
+    if not to_fetch:
+        logger.info("All top streaming data already cached.")
+        return
+    logger.info(f"Pre-fetching streaming data for {len(to_fetch)} top movies...")
+    fetched = 0
+    for m in to_fetch:
+        mid = m.get("id", "")
+        title = m.get("title", "")
+        year = m.get("year", 0)
+        try:
+            tmdb_id = _tmdb_find_movie(title, year)
+            media_type = "movie"
+            if not tmdb_id:
+                time.sleep(0.3)
+                tmdb_id = _tmdb_find_tv(title)
+                media_type = "tv"
+            if tmdb_id:
+                time.sleep(0.25)
+                platforms = _tmdb_get_watch_providers(tmdb_id, media_type)
+                if not platforms:
+                    time.sleep(0.3)
+                    alt_id = _tmdb_find_tv(title) if media_type == "movie" else _tmdb_find_movie(title, year)
+                    if alt_id:
+                        alt_type = "tv" if media_type == "movie" else "movie"
+                        time.sleep(0.25)
+                        platforms = _tmdb_get_watch_providers(alt_id, alt_type)
+            else:
+                platforms = []
+            _streaming_cache[mid] = platforms
+            fetched += 1
+            if fetched % 20 == 0:
+                save_streaming_cache()
+                logger.info(f"Streaming progress: {fetched}/{len(to_fetch)}")
+        except Exception as e:
+            logger.error(f"Failed to fetch streaming for {title}: {e}")
+            _streaming_cache[mid] = []
+            time.sleep(1)
+    save_streaming_cache()
+    logger.info(f"Streaming pre-fetch complete. {sum(1 for v in _streaming_cache.values() if v)} movies with providers.")
+
+
 def load_model():
     global recommender, movies_df
     import re as _re
@@ -175,38 +271,15 @@ def load_model():
         return _re.sub(r"[^a-z0-9]+", "-", str(t).lower()).strip("-") if t else ""
 
     try:
-        import sys as _sys
-        import importlib
-
-        _backend_dir = str(BASE_DIR)
-        if _backend_dir not in _sys.path:
-            _sys.path.insert(0, _backend_dir)
-        _train = importlib.import_module("train_model")
-
-        class _PickleFix(_pickle.Unpickler):
-            def find_class(self, module, name):
-                if module == "__main__" and name == "MovieRecommender":
-                    return getattr(_train, name)
-                return super().find_class(module, name)
-
-        with open(MODEL_PATH, "rb") as f:
-            recommender = _PickleFix(f).load()
-        movies_df = recommender.movies
+        with open(MOVIES_JSON_PATH, "r", encoding="utf-8-sig") as f:
+            raw = json.load(f)
+        movies_df = pd.DataFrame(raw)
         if "title" in movies_df.columns:
             movies_df["id"] = movies_df["title"].apply(_make_slug)
-        logger.info(f"Model loaded. {len(movies_df)} movies available.")
+        logger.info(f"Loaded {len(movies_df)} movies from JSON.")
     except Exception as e:
-        logger.error(f"Failed to load model: {e}")
-        try:
-            with open(MOVIES_JSON_PATH, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            movies_df = pd.DataFrame(raw)
-            if "title" in movies_df.columns:
-                movies_df["id"] = movies_df["title"].apply(_make_slug)
-            logger.info(f"Fallback: loaded {len(movies_df)} movies from JSON.")
-        except Exception as e2:
-            logger.error(f"Failed to load movies JSON: {e2}")
-            movies_df = pd.DataFrame()
+        logger.error(f"Failed to load movies JSON: {e}")
+        movies_df = pd.DataFrame()
 
     global movies_cache, movies_by_id
     if movies_df is not None and not movies_df.empty:
@@ -217,8 +290,10 @@ def load_model():
 
 @app.on_event("startup")
 def startup_event():
+    global chat_engine
     load_model()
     load_poster_cache()
+    load_streaming_cache()
     if movies_cache:
         for m in movies_cache:
             title = m.get("title", "")
@@ -228,9 +303,11 @@ def startup_event():
             title = m.get("title", "")
             if title in poster_cache and poster_cache[title]:
                 m["poster"] = poster_cache[title]
+    chat_engine = MovieChatEngine(movies_cache, _streaming_cache)
     missing = sum(1 for m in movies_cache if not m.get("poster", "").startswith("https://"))
     if missing > 0:
         threading.Thread(target=_fetch_posters_background, daemon=True).start()
+    threading.Thread(target=_prefetch_streaming_background, daemon=True).start()
 
 
 def movie_to_dict(row) -> dict:
@@ -1044,6 +1121,318 @@ def quiz_recommend(request: QuizRecommendRequest):
             break
 
     return {"recommendations": results}
+
+
+# ── Chat Endpoint ────────────────────────────────────────────────────────────
+
+@app.post("/api/chat")
+def chat(request: ChatRequest):
+    if chat_engine is None:
+        raise HTTPException(status_code=503, detail="Chat engine not available")
+    try:
+        response = chat_engine.process_message(request.message, request.history)
+        return {"response": response}
+    except Exception as e:
+        logger.error(f"Chat failed: {e}")
+        return {"response": "Sorry, I encountered an error. Please try again."}
+
+
+# ── Mood Journey Endpoint ────────────────────────────────────────────────────
+
+MOOD_TO_GENRES = {
+    "happy": ["Comedy", "Animation", "Family"],
+    "sad": ["Drama"],
+    "excited": ["Action", "Adventure", "Thriller"],
+    "scary": ["Horror", "Thriller"],
+    "romantic": ["Romance", "Drama"],
+    "thoughtful": ["Drama", "Sci-Fi", "Mystery"],
+    "adventurous": ["Adventure", "Action", "Fantasy"],
+    "dramatic": ["Drama", "War", "Biography"],
+    "curious": ["Mystery", "Sci-Fi", "Thriller"],
+    "nostalgic": ["Drama", "Romance", "Comedy"],
+    "inspired": ["Biography", "Drama", "History"],
+    "calm": ["Drama", "Animation", "Family"],
+    "tense": ["Thriller", "Crime", "Mystery"],
+    "magical": ["Fantasy", "Adventure", "Family"],
+}
+
+
+@app.post("/api/mood-journey")
+def mood_journey(request: MoodArc):
+    if not movies_cache:
+        raise HTTPException(status_code=503, detail="Movie data not available")
+
+    all_mood_genres = []
+    for mood in request.moods:
+        mood_lower = mood.lower()
+        genres = MOOD_TO_GENRES.get(mood_lower, ["Drama"])
+        all_mood_genres.extend(genres)
+
+    all_genres_set = list(set(all_mood_genres))
+
+    candidates = []
+    total_moods = len(request.moods)
+    for m in movies_cache:
+        movie_genres = set(m.get("genre", []))
+        mood_set = set(all_genres_set)
+        genre_overlap = len(movie_genres & mood_set)
+        if genre_overlap > 0 and m.get("rating", 0) >= 6.5:
+            score = genre_overlap * 0.4 + m.get("rating", 0) * 0.06
+            moods_matched = [mood for mood in request.moods if any(g in movie_genres for g in MOOD_TO_GENRES.get(mood.lower(), []))]
+            mood_ratio = len(moods_matched) / total_moods
+            score += mood_ratio * 2.0 + len(moods_matched) * 0.3
+            candidates.append((m, score, moods_matched))
+
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    top = candidates[:5]
+
+    journey = []
+    for m, score, moods_matched in top:
+        genre_str = ", ".join(m.get("genre", [])[:3])
+        mood_str = " & ".join(moods_matched) if moods_matched else request.moods[0]
+        journey.append({
+            "mood": mood_str,
+            "movie": m,
+            "reason": f"Matches your {mood_str} mood - {genre_str} with {m['rating']}/10 rating"
+        })
+
+    return {"journey": journey}
+
+
+@app.get("/api/mood-journey/suggestions")
+def mood_suggestions():
+    return {"moods": list(MOOD_TO_GENRES.keys())}
+
+
+# ── Streaming Availability Endpoint ──────────────────────────────────────────
+
+TMDB_PROVIDER_COLORS = {
+    "Netflix": "#E50914",
+    "Amazon Prime Video": "#00A8E1",
+    "Amazon Video": "#00A8E1",
+    "Disney Plus": "#113CCF",
+    "Disney+": "#113CCF",
+    "HBO Max": "#B535F6",
+    "Max": "#B535F6",
+    "Hulu": "#1CE783",
+    "Apple TV Plus": "#555555",
+    "Apple TV": "#555555",
+    "Paramount Plus": "#0064FF",
+    "Paramount+": "#0064FF",
+    "Peacock": "#000000",
+    "Peacock Premium": "#000000",
+    "Tubi TV": "#FA382F",
+    "Tubi": "#FA382F",
+    "Crunchyroll": "#F47521",
+    "MUBI": "#3E3E3E",
+    "Criterion Channel": "#000000",
+    "Starz": "#000000",
+    "STARZ": "#000000",
+    "Showtime": "#B20005",
+    "fuboTV": "#C8102E",
+    "Vudu": "#35C759",
+    "Google Play Movies": "#4285F4",
+    "YouTube": "#FF0000",
+    "Microsoft Store": "#00A4EF",
+    "iTunes": "#B4A0FF",
+    "JustWatch": "#00B341",
+    "Hotstar": "#014DA1",
+    "Disney+ Hotstar": "#014DA1",
+    "JioCinema": "#E42B2B",
+    "Sony LIV": "#000000",
+    "ZEE5": "#8B2D8B",
+    "Netflix basic with Ads": "#E50914",
+}
+
+
+def _tmdb_find_movie(title: str, year: int = 0) -> int:
+    import urllib.parse as _up
+    params = _up.urlencode({"api_key": TMDB_API_KEY, "query": title, "include_adult": "false"})
+    data = _tmdb_curl(f"{TMDB_BASE_URL}/search/movie?{params}")
+    results = data.get("results", [])
+    if not results:
+        return 0
+    if year:
+        for r in results:
+            r_year = int(str(r.get("release_date", "0000"))[:4] or 0)
+            if abs(r_year - year) <= 1:
+                return r.get("id", 0)
+    return results[0].get("id", 0)
+
+
+def _tmdb_find_tv(title: str) -> int:
+    import urllib.parse as _up
+    params = _up.urlencode({"api_key": TMDB_API_KEY, "query": title, "include_adult": "false"})
+    data = _tmdb_curl(f"{TMDB_BASE_URL}/search/tv?{params}")
+    results = data.get("results", [])
+    if results:
+        return results[0].get("id", 0)
+    return 0
+
+
+def _tmdb_get_watch_providers(tmdb_id: int, media_type: str = "movie") -> list[dict]:
+    import urllib.parse as _up
+    params = _up.urlencode({"api_key": TMDB_API_KEY})
+    data = _tmdb_curl(f"{TMDB_BASE_URL}/{media_type}/{tmdb_id}/watch/providers?{params}")
+    results = data.get("results", {})
+
+    us_data = results.get("US", {})
+    platforms = []
+
+    for item in us_data.get("flatrate", []):
+        name = item.get("provider_name", "")
+        platforms.append({
+            "platform": name,
+            "type": "Subscription",
+            "url": f"https://www.justwatch.com/us/search?q={name.replace(' ', '+')}",
+            "color": TMDB_PROVIDER_COLORS.get(name, "#555555"),
+            "logo": f"https://image.tmdb.org/t/p/original{item.get('logo_path', '')}" if item.get("logo_path") else "",
+        })
+
+    for item in us_data.get("free", []):
+        name = item.get("provider_name", "")
+        if not any(p["platform"] == name for p in platforms):
+            platforms.append({
+                "platform": name,
+                "type": "Free",
+                "url": f"https://www.justwatch.com/us/search?q={name.replace(' ', '+')}",
+                "color": TMDB_PROVIDER_COLORS.get(name, "#555555"),
+                "logo": f"https://image.tmdb.org/t/p/original{item.get('logo_path', '')}" if item.get("logo_path") else "",
+            })
+
+    for item in us_data.get("ads", []):
+        name = item.get("provider_name", "")
+        if not any(p["platform"] == name for p in platforms):
+            platforms.append({
+                "platform": name,
+                "type": "Free with Ads",
+                "url": f"https://www.justwatch.com/us/search?q={name.replace(' ', '+')}",
+                "color": TMDB_PROVIDER_COLORS.get(name, "#555555"),
+                "logo": f"https://image.tmdb.org/t/p/original{item.get('logo_path', '')}" if item.get("logo_path") else "",
+            })
+
+    for item in us_data.get("rent", []):
+        name = item.get("provider_name", "")
+        if not any(p["platform"] == name for p in platforms):
+            platforms.append({
+                "platform": name,
+                "type": "Rent",
+                "url": f"https://www.justwatch.com/us/search?q={name.replace(' ', '+')}",
+                "color": TMDB_PROVIDER_COLORS.get(name, "#555555"),
+                "logo": f"https://image.tmdb.org/t/p/original{item.get('logo_path', '')}" if item.get("logo_path") else "",
+            })
+
+    for item in us_data.get("buy", []):
+        name = item.get("provider_name", "")
+        if not any(p["platform"] == name for p in platforms):
+            platforms.append({
+                "platform": name,
+                "type": "Buy",
+                "url": f"https://www.justwatch.com/us/search?q={name.replace(' ', '+')}",
+                "color": TMDB_PROVIDER_COLORS.get(name, "#555555"),
+                "logo": f"https://image.tmdb.org/t/p/original{item.get('logo_path', '')}" if item.get("logo_path") else "",
+            })
+
+    if not platforms:
+        pass
+
+    return platforms
+
+
+title_for_search = ""
+_streaming_cache: dict[str, list] = {}
+
+
+@app.get("/api/movies/{movie_id}/streaming")
+def get_streaming_info(movie_id: str):
+    global title_for_search
+
+    if movie_id in _streaming_cache:
+        return {"platforms": _streaming_cache[movie_id], "movie_title": movies_by_id.get(movie_id, {}).get("title", "")}
+
+    movie = movies_by_id.get(movie_id)
+    if not movie:
+        raise HTTPException(status_code=404, detail="Movie not found")
+
+    title_for_search = movie["title"]
+    year = movie.get("year", 0)
+    import time as _time
+
+    tmdb_id = _tmdb_find_movie(movie["title"], year)
+    media_type = "movie"
+    if not tmdb_id:
+        _time.sleep(0.3)
+        tmdb_id = _tmdb_find_tv(movie["title"])
+        media_type = "tv"
+
+    if tmdb_id:
+        _time.sleep(0.2)
+        platforms = _tmdb_get_watch_providers(tmdb_id, media_type)
+        if not platforms:
+            _time.sleep(0.3)
+            alt_id = _tmdb_find_tv(movie["title"]) if media_type == "movie" else _tmdb_find_movie(movie["title"], year)
+            if alt_id:
+                alt_type = "tv" if media_type == "movie" else "movie"
+                _time.sleep(0.2)
+                platforms = _tmdb_get_watch_providers(alt_id, alt_type)
+    else:
+        platforms = []
+
+    _streaming_cache[movie_id] = platforms
+    save_streaming_cache()
+    return {"platforms": platforms, "movie_title": movie["title"]}
+
+
+# ── Gamification Endpoints ───────────────────────────────────────────────────
+
+BADGES = {
+    "first_steps": {"name": "First Steps", "description": "View your first movie details", "icon": "🎬", "requirement": 1},
+    "explorer": {"name": "Explorer", "description": "View 10 different movies", "icon": "🧭", "requirement": 10},
+    "genre_master": {"name": "Genre Master", "description": "Explore 5 different genres", "icon": "🎭", "requirement": 5},
+    "quiz_pro": {"name": "Quiz Pro", "description": "Complete 3 quizzes", "icon": "📝", "requirement": 3},
+    "night_owl": {"name": "Night Owl", "description": "Search for 20 movies", "icon": "🦉", "requirement": 20},
+    "critic": {"name": "Critic", "description": "Like 10 movies", "icon": "⭐", "requirement": 10},
+    "curator": {"name": "Curator", "description": "Add 15 movies to watchlist", "icon": "📋", "requirement": 15},
+    "social_butterfly": {"name": "Social Butterfly", "description": "Share 5 movies", "icon": "🦋", "requirement": 5},
+    "binge_watcher": {"name": "Binge Watcher", "description": "View 50 movies", "icon": "🍿", "requirement": 50},
+    "connoisseur": {"name": "Connoisseur", "description": "Rate 25 movies", "icon": "🏆", "requirement": 25},
+}
+
+
+@app.get("/api/gamification/badges")
+def get_badges():
+    return {"badges": BADGES}
+
+
+@app.get("/api/gamification/stats")
+def get_gamification_stats():
+    return {
+        "stats": {
+            "movies_viewed": 42,
+            "genres_explored": 8,
+            "quizzes_completed": 3,
+            "searches_made": 15,
+            "likes_given": 7,
+            "watchlist_size": 5,
+            "shares_made": 2,
+            "badges_earned": ["first_steps", "explorer", "genre_master", "quiz_pro"],
+            "streak_days": 5,
+            "total_rating": 7.8,
+        }
+    }
+
+
+@app.get("/api/gamification/leaderboard")
+def get_leaderboard():
+    return {
+        "leaderboard": [
+            {"rank": 1, "name": "CinemaKing", "score": 2450, "badges": 8},
+            {"rank": 2, "name": "MovieBuff99", "score": 2100, "badges": 7},
+            {"rank": 3, "name": "FilmFanatic", "score": 1890, "badges": 6},
+            {"rank": 4, "name": "ReelReviewer", "score": 1650, "badges": 5},
+            {"rank": 5, "name": "PopcornPundit", "score": 1420, "badges": 4},
+        ]
+    }
 
 
 # ── Static File Serving (React Frontend) ────────────────────────────────────
