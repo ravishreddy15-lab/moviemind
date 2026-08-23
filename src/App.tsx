@@ -43,7 +43,7 @@ export default function App() {
       <Routes location={location} key={location.pathname}>
         <Route path="/login" element={<LoginPage />} />
         <Route element={isLoggedIn || isLoginPage ? <MainLayout /> : <Navigate to="/login" replace />}>
-          <Route index element={<Navigate to="/search" replace />} />
+          <Route index element={<HomePage />} />
           <Route path="search" element={<SearchPage />} />
           <Route path="quiz" element={<QuizPage />} />
           <Route path="loading" element={<LoadingPage />} />
