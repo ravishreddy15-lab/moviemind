@@ -38,7 +38,7 @@ export default function LoginPage() {
     setSuccess(true);
     setTimeout(() => {
       localStorage.setItem("moviemind_user", JSON.stringify({ email, loggedIn: true }));
-      navigate("/");
+      navigate("/search");
     }, 1200);
   };
 
@@ -154,7 +154,7 @@ export default function LoginPage() {
                 variant="outline"
                 onClick={() => {
                   localStorage.setItem("moviemind_user", JSON.stringify({ email: "guest.cinephile@moviemind.ai", loggedIn: true }));
-                  navigate("/");
+                  navigate("/search");
                 }}
                 className="w-full border-zinc-700 bg-zinc-800/60 hover:bg-zinc-800 text-zinc-200 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2"
               >
