@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { useEffect, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import MainLayout from "@/layouts/MainLayout";
 import HomePage from "@/pages/HomePage";
@@ -20,15 +20,19 @@ function ScrollToTop() {
   return null;
 }
 
+function checkLoggedIn() {
+  try {
+    const user = JSON.parse(localStorage.getItem("moviemind_user") || "{}");
+    return user.loggedIn === true;
+  } catch { return false; }
+}
+
 export default function App() {
   const location = useLocation();
-  const isLoggedIn = useMemo(() => {
-    try {
-      const user = JSON.parse(localStorage.getItem("moviemind_user") || "{}");
-      return user.loggedIn === true;
-    } catch {
-      return false;
-    }
+  const [isLoggedIn, setIsLoggedIn] = useState(checkLoggedIn);
+
+  useEffect(() => {
+    setIsLoggedIn(checkLoggedIn());
   }, [location.pathname]);
 
   const isLoginPage = location.pathname === "/login";
@@ -39,7 +43,7 @@ export default function App() {
       <Routes location={location} key={location.pathname}>
         <Route path="/login" element={<LoginPage />} />
         <Route element={isLoggedIn || isLoginPage ? <MainLayout /> : <Navigate to="/login" replace />}>
-          <Route index element={<Navigate to="/login" replace />} />
+          <Route index element={<Navigate to="/search" replace />} />
           <Route path="search" element={<SearchPage />} />
           <Route path="quiz" element={<QuizPage />} />
           <Route path="loading" element={<LoadingPage />} />
