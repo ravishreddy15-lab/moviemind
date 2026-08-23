@@ -195,7 +195,7 @@ export default function HomePage() {
           <div className="grid lg:grid-cols-2 gap-8">
             <div className="space-y-4">
               <div className="flex items-center gap-2"><MessageCircle className="w-5 h-5 text-purple-400" /><h2 className="text-2xl font-bold text-white">AI Movie Chat</h2></div>
-              <p className="text-muted-foreground">Ask anything about movies - get recommendations, find similar films, or compare titles. Powered by our 7,912 movie database.</p>
+              <p className="text-muted-foreground">Ask anything about movies - get recommendations, find similar films, or compare titles.</p>
               <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl overflow-hidden">
                 <div className="h-64 overflow-y-auto p-4 space-y-3">
                   {chatMessages.length === 0 && <div className="text-center text-zinc-500 text-sm py-8">Try: "Recommend a sci-fi movie" or "I feel like laughing"</div>}

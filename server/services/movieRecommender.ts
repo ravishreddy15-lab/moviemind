@@ -186,11 +186,13 @@ export function getPersonalizedRecommendations(params: {
   mood?: string;
   genres?: string[];
   max_runtime?: number;
+  min_runtime?: number;
   query?: string;
   rating_min?: number;
   year_min?: number;
   year_max?: number;
   tempo?: string;
+  style?: string;
   favorite_actor?: string;
   favorite_director?: string;
   count?: number;
@@ -260,25 +262,48 @@ export function getPersonalizedRecommendations(params: {
       if (t.includes("fast") && movie.duration_minutes <= 130) {
         score += 15;
         reasons.push("briskly paced runtime");
-      } else if (t.includes("slow") || t.includes("epic") || t.includes("deep")) {
-        if (movie.duration_minutes > 140) {
+      } else if (t.includes("slow")) {
+        if (movie.duration_minutes > 130) {
           score += 15;
-          reasons.push("expansive, epic story structure");
+          reasons.push("deliberate, slow-burn storytelling");
+        }
+      }
+      // moderate and varied: no runtime preference, skip
+    }
+
+    // 4. Style preference
+    if (params.style) {
+      const s = params.style.toLowerCase();
+      if (s.includes("blockbuster")) {
+        if (movie.genre.some((g) => ["Action", "Adventure", "Sci-Fi"].includes(g)) && movie.votes > 500000) {
+          score += 20;
+          reasons.push("big-budget blockbuster spectacle");
+        }
+      } else if (s.includes("indie")) {
+        if (movie.votes < 300000 && movie.rating >= 7.5) {
+          score += 20;
+          reasons.push("artistic indie gem");
+        }
+      } else if (s.includes("classic")) {
+        if (movie.year <= 2000 && movie.rating >= 8.0) {
+          score += 20;
+          reasons.push("timeless classic");
+        }
+      } else if (s.includes("hidden")) {
+        if (movie.votes < 200000) {
+          score += 20;
+          reasons.push("hidden gem waiting to be discovered");
         }
       }
     }
 
-    if (params.max_runtime && movie.duration_minutes <= params.max_runtime) {
-      score += 10;
-    }
-
-    // 4. Rating & Critical Acclaim bonus
+    // 5. Rating & Critical Acclaim bonus
     if (params.rating_min && movie.rating >= params.rating_min) {
       score += 15;
     }
     score += (movie.rating - 7.0) * 8;
 
-    // 5. Query matching
+    // 6. Query matching
     if (params.query) {
       const q = params.query.toLowerCase();
       if (movie.title.toLowerCase().includes(q)) score += 45;
@@ -304,11 +329,20 @@ export function getPersonalizedRecommendations(params: {
     return { movie, match_percentage, reason, score };
   });
 
+  // Hard filter by runtime preferences
+  let filtered = scoredMovies;
+  if (params.max_runtime) {
+    filtered = filtered.filter((m) => m.movie.duration_minutes <= params.max_runtime!);
+  }
+  if (params.min_runtime) {
+    filtered = filtered.filter((m) => m.movie.duration_minutes >= params.min_runtime!);
+  }
+
   // Sort descending by score
-  scoredMovies.sort((a, b) => b.score - a.score);
+  filtered.sort((a, b) => b.score - a.score);
 
   // Return the requested count
-  return scoredMovies.slice(0, count).map(({ movie, match_percentage, reason }) => ({
+  return filtered.slice(0, count).map(({ movie, match_percentage, reason }) => ({
     movie,
     match_percentage,
     reason
@@ -327,17 +361,23 @@ export function getQuizRecommendations(answers: any): RecommendationResult[] {
   const length = answers.length || "";
 
   let maxRuntime: number | undefined;
+  let minRuntime: number | undefined;
   if (length.includes("90") || length.includes("short") || length.includes("Under")) {
-    maxRuntime = 110;
-  } else if (length.includes("120") || length.includes("standard")) {
-    maxRuntime = 135;
+    maxRuntime = 90;
+  } else if (length.includes("120") || length.includes("medium")) {
+    minRuntime = 90;
+    maxRuntime = 130;
+  } else if (length.includes("long") || length.includes("2+")) {
+    minRuntime = 120;
   }
 
   return getPersonalizedRecommendations({
-    mood: `${mood} ${style}`,
+    mood,
     genres,
+    style,
     tempo: pacing,
     max_runtime: maxRuntime,
+    min_runtime: minRuntime,
     count: 16
   });
 }
