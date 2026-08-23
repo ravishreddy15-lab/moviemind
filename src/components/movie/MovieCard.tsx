@@ -10,6 +10,8 @@ interface MovieCardProps {
   movie: Movie;
   showMatch?: boolean;
   compact?: boolean;
+  rank?: number;
+  sortBy?: string;
 }
 
 const genreGradients: Record<string, string> = {
@@ -39,7 +41,7 @@ function useWatchlistSync(movieId: string) {
   return { inWatchlist, setInWatchlist, liked, setLiked };
 }
 
-export default function MovieCard({ movie, showMatch = false, compact = false }: MovieCardProps) {
+export default function MovieCard({ movie, showMatch = false, compact = false, rank, sortBy }: MovieCardProps) {
   const navigate = useNavigate();
   const [imgError, setImgError] = useState(false);
   const { inWatchlist, setInWatchlist, liked, setLiked } = useWatchlistSync(movie.id);
@@ -51,13 +53,31 @@ export default function MovieCard({ movie, showMatch = false, compact = false }:
     <div
       onClick={() => navigate(`/movie/${movie.id}`)}
       className={cn(
-        "group relative rounded-xl bg-zinc-900/80 border border-zinc-800 overflow-hidden cursor-pointer transition-all duration-200 hover-glow",
-        compact ? "w-[180px]" : "w-full"
+        "group relative rounded-xl bg-zinc-900/80 border border-zinc-800 overflow-hidden cursor-pointer transition-all duration-200 hover-glow w-full",
+        compact ? "max-w-[220px]" : "w-full"
       )}
       role="article"
       aria-label={`${movie.title}, ${movie.year}, rated ${movie.rating}`}
     >
-      {showMatch && movie.matchPercentage !== undefined && (
+      {/* Rank Indicator Badge */}
+      {rank !== undefined && rank > 0 && (
+        <div
+          className={cn(
+            "absolute top-2 right-2 z-20 text-[11px] font-bold px-2 py-0.5 rounded-md backdrop-blur-md shadow-md flex items-center gap-1",
+            rank === 1
+              ? "bg-amber-500 text-black shadow-amber-500/30"
+              : rank === 2
+              ? "bg-slate-300 text-black shadow-slate-300/30"
+              : rank === 3
+              ? "bg-amber-700 text-white shadow-amber-700/30"
+              : "bg-black/70 text-zinc-300 border border-zinc-700/60"
+          )}
+        >
+          #{rank}
+        </div>
+      )}
+
+      {showMatch && movie.matchPercentage !== undefined && rank === undefined && (
         <div className="absolute top-2 right-2 z-10 bg-primary/90 text-white text-xs font-bold rounded-full px-2 py-0.5">
           {movie.matchPercentage}% Match
         </div>
@@ -80,12 +100,13 @@ export default function MovieCard({ movie, showMatch = false, compact = false }:
         </button>
       </div>
 
-      <div className={cn("relative overflow-hidden", compact ? "aspect-video" : "aspect-[2/3]")}>
+      <div className="relative overflow-hidden aspect-[2/3]">
         {showPoster ? (
           <>
             <img
               src={poster}
               alt={`${movie.title} poster`}
+              referrerPolicy="no-referrer"
               className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
               onError={() => setImgError(true)}
             />
@@ -107,8 +128,12 @@ export default function MovieCard({ movie, showMatch = false, compact = false }:
         <h3 className={cn("font-semibold text-white truncate", compact ? "text-xs" : "text-sm")}>
           {movie.title}
         </h3>
-        <p className="text-xs text-zinc-400 mt-0.5">
-          {movie.year} &bull; {movie.duration}
+        <p className="text-xs text-zinc-400 mt-0.5 flex items-center gap-1.5 flex-wrap">
+          <span className={cn(sortBy === "year" || sortBy === "oldest" ? "text-purple-300 font-semibold bg-purple-900/40 px-1.5 py-0.5 rounded border border-purple-500/30" : "")}>
+            {movie.year}
+          </span>
+          <span>&bull;</span>
+          <span>{movie.duration}</span>
         </p>
 
         <div className="flex items-center gap-1.5 mt-2 flex-wrap">
@@ -122,9 +147,18 @@ export default function MovieCard({ movie, showMatch = false, compact = false }:
         <div className="flex items-center gap-2 mt-2">
           <RatingBadge rating={movie.rating} size="sm" />
           {!compact && (
-            <span className="inline-flex items-center gap-0.5 text-[10px] text-zinc-500">
-              <Star className="h-3 w-3 fill-zinc-600 text-zinc-600" />
-              {movie.votes >= 1000000 ? `${(movie.votes / 1000000).toFixed(1)}M` : `${(movie.votes / 1000).toFixed(0)}K`}
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 text-[10px] rounded px-1 py-0.5",
+                sortBy === "popularity" || sortBy === "votes"
+                  ? "bg-purple-950/70 text-purple-300 font-medium border border-purple-800/40"
+                  : "text-zinc-500"
+              )}
+            >
+              <Star className={cn("h-3 w-3", sortBy === "popularity" || sortBy === "votes" ? "fill-purple-400 text-purple-400" : "fill-zinc-600 text-zinc-600")} />
+              {movie.votes >= 1000000
+                ? `${(movie.votes / 1000000).toFixed(1)}M votes`
+                : `${(movie.votes / 1000).toFixed(0)}K votes`}
             </span>
           )}
         </div>

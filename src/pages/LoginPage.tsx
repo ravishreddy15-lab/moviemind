@@ -143,6 +143,24 @@ export default function LoginPage() {
                   <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 ) : (<>Sign In<ArrowRight className="w-4 h-4 ml-2" /></>)}
               </Button>
+
+              <div className="relative flex items-center justify-center my-3">
+                <div className="border-t border-zinc-800 w-full" />
+                <span className="bg-zinc-900 px-3 text-xs text-zinc-500 uppercase tracking-wider">or</span>
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  localStorage.setItem("moviemind_user", JSON.stringify({ email: "guest.cinephile@moviemind.ai", loggedIn: true }));
+                  navigate("/");
+                }}
+                className="w-full border-zinc-700 bg-zinc-800/60 hover:bg-zinc-800 text-zinc-200 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-2"
+              >
+                <Sparkles className="w-4 h-4 text-purple-400" />
+                Explore as Guest (Instant Demo)
+              </Button>
             </form>
           </div>
           <p className="text-center text-xs text-zinc-600">

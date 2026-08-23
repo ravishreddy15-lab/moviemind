@@ -114,13 +114,26 @@ export default function HomePage() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const [trendingRes, topRatedRes, genresRes, moodsRes, statsRes] = await Promise.all([getTrending(12), getTopRated(12), getGenres(), getMoodSuggestions(), getGamificationStats()]);
-        setTrendingMovies(trendingRes.movies);
-        setTopRatedMovies(topRatedRes.movies);
-        setAllGenres(genresRes.genres);
-        setAvailableMoods(moodsRes.moods);
-        setUserStats(statsRes.stats);
-      } catch (err) { console.error("Failed to fetch homepage data:", err); } finally { setLoading(false); }
+        const [trendingRes, topRatedRes, genresRes, moodsRes, statsRes] = await Promise.all([
+          getTrending(12).catch(() => ({ movies: [] })),
+          getTopRated(12).catch(() => ({ movies: [] })),
+          getGenres().catch(() => ({ genres: [] })),
+          getMoodSuggestions().catch(() => ({ moods: [] })),
+          getGamificationStats().catch(() => ({ stats: null }))
+        ]);
+        setTrendingMovies(trendingRes?.movies || []);
+        setTopRatedMovies(topRatedRes?.movies || []);
+        setAllGenres(genresRes?.genres || []);
+        setAvailableMoods(moodsRes?.moods && moodsRes.moods.length > 0 ? moodsRes.moods : [
+          "happy", "sad", "excited", "scary", "romantic", "thoughtful",
+          "adventurous", "dramatic", "curious", "nostalgic", "inspired", "calm", "tense", "magical"
+        ]);
+        setUserStats(statsRes?.stats || null);
+      } catch (err) {
+        console.error("Failed to fetch homepage data:", err);
+      } finally {
+        setLoading(false);
+      }
     }
     fetchData();
   }, []);
@@ -146,11 +159,11 @@ export default function HomePage() {
       <HeroSection />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-24 py-16">
         <section className="animate-fade-in-up">
-          <HorizontalScrollRow title="Trending Now" subtitle="Most popular movies this week" moviesList={trendingMovies} viewAllLink="/search" loading={loading} />
+          <HorizontalScrollRow title="Trending Now" subtitle="Most popular movies this week" moviesList={trendingMovies} viewAllLink="/search?sortBy=popularity" loading={loading} />
         </section>
 
         <section className="animate-fade-in-up stagger-2">
-          <HorizontalScrollRow title="Top Rated" subtitle="Critically acclaimed masterpieces" moviesList={topRatedMovies} viewAllLink="/search" loading={loading} />
+          <HorizontalScrollRow title="Top Rated" subtitle="Critically acclaimed masterpieces" moviesList={topRatedMovies} viewAllLink="/search?sortBy=rating&minRating=8" loading={loading} />
         </section>
 
         <section className="animate-fade-in-up stagger-3">

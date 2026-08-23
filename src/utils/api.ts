@@ -27,16 +27,20 @@ export interface Recommendation {
 }
 
 export interface QuizAnswers {
-  mood: string;
-  genres: string[];
-  movie_length: string;
-  release_period: string;
-  imdb_rating: string;
-  family_friendly: boolean;
-  language: string;
-  favorite_actor: string;
-  favorite_director: string;
-  description: string;
+  mood?: string;
+  genres?: string[];
+  style?: string;
+  pace?: string;
+  length?: string;
+  movie_length?: string;
+  release_period?: string;
+  imdb_rating?: string;
+  family_friendly?: boolean;
+  language?: string;
+  favorite_actor?: string;
+  favorite_director?: string;
+  description?: string;
+  [key: string]: any;
 }
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
@@ -84,16 +88,37 @@ export async function searchMovies(
   minRating = 0,
   yearFrom = 1900,
   yearTo = 2030,
-  sortBy = "relevance"
+  sortBy = "relevance",
+  page = 1
 ) {
   const params = new URLSearchParams();
   if (q) params.set("q", q);
-  if (genre) params.set("genre", genre);
+  if (genre && genre !== "All") params.set("genre", genre);
   if (minRating) params.set("min_rating", String(minRating));
   if (yearFrom > 1900) params.set("year_from", String(yearFrom));
   if (yearTo < 2030) params.set("year_to", String(yearTo));
-  if (sortBy !== "relevance") params.set("sort_by", sortBy);
-  return apiFetch<{ movies: Movie[]; total: number }>(`/search?${params}`);
+  if (sortBy) {
+    params.set("sort_by", sortBy);
+  }
+  if (page > 1) {
+    params.set("page", String(page));
+  }
+  const res = await apiFetch<{ movies?: Movie[]; results?: Movie[]; total?: number; page?: number; total_pages?: number }>(`/search?${params}`);
+  return {
+    movies: res.movies || res.results || [],
+    total: typeof res.total === "number" ? res.total : (res.movies?.length || 0),
+    page: res.page || page,
+    totalPages: res.total_pages || Math.ceil((res.total || 0) / 24)
+  };
+}
+
+export async function getTmdbStatus() {
+  return apiFetch<{
+    configured: boolean;
+    total_movies_accessible: number;
+    mode: string;
+    message: string;
+  }>("/tmdb/status");
 }
 
 export async function getRecommendations(params: {
@@ -129,7 +154,12 @@ export async function getGenres() {
 }
 
 export async function sendChatMessage(message: string, history: Array<{role: string; content: string}> = []) {
-  return apiFetch<{ response: string }>("/chat", {
+  return apiFetch<{
+    response: string;
+    reply?: string;
+    suggested_movies?: Movie[];
+    quick_actions?: string[];
+  }>("/chat", {
     method: "POST",
     body: JSON.stringify({ message, history }),
   });
@@ -147,7 +177,7 @@ export async function getMoodSuggestions() {
 }
 
 export async function getStreamingInfo(id: string) {
-  return apiFetch<{ platforms: Array<{platform: string; type: string; url: string; color: string}>; movie_title: string }>(
+  return apiFetch<{ platforms: Array<{platform: string; type: string; url: string; color: string; logo?: string}>; movie_title: string }>(
     `/movies/${encodeURIComponent(id)}/streaming`
   );
 }

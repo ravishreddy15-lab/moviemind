@@ -13,7 +13,7 @@ export default function MovieDetailsPage() {
   const { id } = useParams<{ id: string }>();
   const [movie, setMovie] = useState<Movie | null>(null);
   const [similarMovies, setSimilarMovies] = useState<Recommendation[]>([]);
-  const [streamingPlatforms, setStreamingPlatforms] = useState<Array<{ platform: string; type: string; url: string; color: string; logo: string }>>([]);
+  const [streamingPlatforms, setStreamingPlatforms] = useState<Array<{ platform: string; type: string; url: string; color: string; logo?: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [inWatchlist, setInWatchlist] = useState(false);

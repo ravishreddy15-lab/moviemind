@@ -36,7 +36,7 @@ export default function QuizPage() {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(0);
   const [quizData, setQuizData] = useState({
-    moods: [] as string[],
+    mood: "" as string,
     genres: [] as string[],
     style: "",
     pace: "",
@@ -50,9 +50,23 @@ export default function QuizPage() {
     setQuizData((prev) => ({ ...prev, [key]: value }));
   };
 
+  const toggleGenre = (genre: string) => {
+    setQuizData((prev) => {
+      const exists = prev.genres.includes(genre);
+      if (exists) {
+        return { ...prev, genres: prev.genres.filter((g) => g !== genre) };
+      } else if (prev.genres.length < 5) {
+        return { ...prev, genres: [...prev.genres, genre] };
+      }
+      return prev;
+    });
+  };
+
+  const [submitting, setSubmitting] = useState(false);
+
   const canProceed = () => {
     const step = steps[currentStep];
-    if (step === "mood") return quizData.moods.length > 0;
+    if (step === "mood") return quizData.mood !== "";
     if (step === "genres") return quizData.genres.length > 0;
     if (step === "style") return quizData.style !== "";
     if (step === "pace") return quizData.pace !== "";
@@ -64,8 +78,9 @@ export default function QuizPage() {
     if (currentStep < totalSteps - 1) {
       setCurrentStep((prev) => prev + 1);
     } else {
+      setSubmitting(true);
       const params = new URLSearchParams();
-      if (quizData.moods.length) params.set("moods", quizData.moods.join(","));
+      if (quizData.mood) params.set("mood", quizData.mood);
       if (quizData.genres.length) params.set("genres", quizData.genres.join(","));
       if (quizData.style) params.set("style", quizData.style);
       if (quizData.pace) params.set("pace", quizData.pace);
@@ -92,27 +107,25 @@ export default function QuizPage() {
 
         <div className="animate-fade-in-up stagger-2">
           {steps[currentStep] === "mood" && (
-            <QuizCard title="What's your current mood?" subtitle="Select all that apply">
+            <QuizCard title="What's your current mood?" description="Select the mood that fits you right now" stepNumber={1} totalSteps={totalSteps}>
               <MoodSelector
-                selectedMoods={quizData.moods}
-                onMoodsChange={(moods) => updateQuizData("moods", moods)}
-                multiSelect
+                selectedMood={quizData.mood}
+                onSelect={(mood) => updateQuizData("mood", mood)}
               />
             </QuizCard>
           )}
 
           {steps[currentStep] === "genres" && (
-            <QuizCard title="Pick your favorite genres" subtitle="Choose up to 3 genres">
+            <QuizCard title="Pick your favorite genres" description="Choose up to 5 genres" stepNumber={2} totalSteps={totalSteps}>
               <GenreSelector
                 selectedGenres={quizData.genres}
-                onGenresChange={(genres) => updateQuizData("genres", genres)}
-                maxSelections={3}
+                onToggle={toggleGenre}
               />
             </QuizCard>
           )}
 
           {steps[currentStep] === "style" && (
-            <QuizCard title="What kind of movie experience?" subtitle="Choose your preferred style">
+            <QuizCard title="What kind of movie experience?" description="Choose your preferred style" stepNumber={3} totalSteps={totalSteps}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {styleOptions.map((option) => (
                   <button
@@ -135,7 +148,7 @@ export default function QuizPage() {
           )}
 
           {steps[currentStep] === "pace" && (
-            <QuizCard title="What pacing do you prefer?" subtitle="How fast should the movie move?">
+            <QuizCard title="What pacing do you prefer?" description="How fast should the movie move?" stepNumber={4} totalSteps={totalSteps}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {paceOptions.map((option) => (
                   <button
@@ -158,7 +171,7 @@ export default function QuizPage() {
           )}
 
           {steps[currentStep] === "length" && (
-            <QuizCard title="How long should the movie be?" subtitle="Pick your preferred runtime">
+            <QuizCard title="How long should the movie be?" description="Pick your preferred runtime" stepNumber={5} totalSteps={totalSteps}>
               <div className="grid grid-cols-2 gap-4">
                 {lengthOptions.map((option) => (
                   <button

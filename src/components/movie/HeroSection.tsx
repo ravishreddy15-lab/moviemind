@@ -45,9 +45,9 @@ export default function HeroSection() {
         </div>
 
         <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight leading-tight animate-fade-in-up stagger-2">
-          <span className="gradient-text">What Should You</span>
+          <span className="gradient-text">Discover Your</span>
           <br />
-          <span className="gradient-text">Watch Tonight?</span>
+          <span className="gradient-text">Next Favorite Movie</span>
         </h1>
 
         <p className="mt-6 text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto leading-relaxed animate-fade-in-up stagger-3">

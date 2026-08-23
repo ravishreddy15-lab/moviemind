@@ -29,7 +29,25 @@ export default function MoodJourneyPage() {
   const [loading, setLoading] = useState(false);
   const [showAddMood, setShowAddMood] = useState(false);
 
-  useEffect(() => { getMoodSuggestions().then((res) => setAvailableMoods(res.moods)); }, []);
+  useEffect(() => {
+    getMoodSuggestions()
+      .then((res) => {
+        if (res?.moods && res.moods.length > 0) {
+          setAvailableMoods(res.moods);
+        } else {
+          setAvailableMoods([
+            "happy", "sad", "excited", "scary", "romantic", "thoughtful",
+            "adventurous", "dramatic", "curious", "nostalgic", "inspired", "calm", "tense", "magical"
+          ]);
+        }
+      })
+      .catch(() => {
+        setAvailableMoods([
+          "happy", "sad", "excited", "scary", "romantic", "thoughtful",
+          "adventurous", "dramatic", "curious", "nostalgic", "inspired", "calm", "tense", "magical"
+        ]);
+      });
+  }, []);
 
   const addMood = (mood: string) => { setSelectedMoods((prev) => [...prev, { id: Date.now().toString(), mood }]); setShowAddMood(false); };
   const removeMood = (id: string) => { setSelectedMoods((prev) => prev.filter((m) => m.id !== id)); };
