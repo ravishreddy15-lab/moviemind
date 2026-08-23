@@ -307,7 +307,7 @@ Would you like more recommendations similar to these, or would you like to explo
   // 9. User asks for CRIME / DARK / HORROR / MYSTERY
   else if (lower.includes("dark") || lower.includes("crime") || lower.includes("horror") || lower.includes("mystery") || lower.includes("scary") || lower.includes("spooky") || lower.includes("se7en") || lower.includes("psycho")) {
     matchedMovies = MOVIES_DATABASE.filter((m) =>
-      ["se7en", "the-silence-of-the-lambs", "goodfellas", "the-departed", "psycho", "alien", "parasite-thriller"].includes(m.id) ||
+      ["se7en", "the-silence-of-the-lambs", "goodfellas", "the-departed", "psycho", "alien", "memories-of-murder"].includes(m.id) ||
       m.genre.includes("Crime") || m.genre.includes("Horror")
     ).slice(0, 3);
 

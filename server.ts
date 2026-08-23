@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import cors from "cors";
+import "dotenv/config";
 import { createServer as createViteServer } from "vite";
 import {
   getAllMovies,
@@ -26,7 +27,7 @@ import { processChat } from "./server/services/chatService";
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = parseInt(process.env.PORT || "3000", 10);
 
   app.use(cors());
   app.use(express.json());
@@ -377,25 +378,38 @@ async function startServer() {
   // Gamification endpoints
   app.get("/api/gamification/badges", (req, res) => {
     res.json({
-      badges: [
-        { id: "cinephile-initiate", name: "Cinephile Initiate", description: "Explored 5 critically acclaimed films", icon: "Film", category: "Discovery", unlocked: true },
-        { id: "nolan-scholar", name: "Nolan Scholar", description: "Watched or saved Christopher Nolan masterpieces", icon: "Brain", category: "Director", unlocked: true },
-        { id: "genre-explorer", name: "Genre Explorer", description: "Explored films across 5 distinct genres", icon: "Compass", category: "Variety", unlocked: false },
-        { id: "night-owl", name: "Midnight Screenings", description: "Engaged with the AI recommender late night", icon: "Moon", category: "Activity", unlocked: true },
-        { id: "taste-master", name: "Taste Master", description: "Completed the cinema quiz and rated 10 movies", icon: "Sparkles", category: "Mastery", unlocked: false }
-      ]
+      badges: {
+        "cinephile-initiate": { name: "Cinephile Initiate", description: "Explored 5 critically acclaimed films", icon: "Film", requirement: 5 },
+        "nolan-scholar": { name: "Nolan Scholar", description: "Watched or saved Christopher Nolan masterpieces", icon: "Brain", requirement: 3 },
+        "genre-explorer": { name: "Genre Explorer", description: "Explored films across 5 distinct genres", icon: "Compass", requirement: 5 },
+        "night-owl": { name: "Midnight Screenings", description: "Engaged with the AI recommender late night", icon: "Moon", requirement: 1 },
+        "taste-master": { name: "Taste Master", description: "Completed the cinema quiz and rated 10 movies", icon: "Sparkles", requirement: 10 },
+        "first-steps": { name: "First Steps", description: "View your first movie", icon: "Film", requirement: 1 },
+        "explorer": { name: "Explorer", description: "View 10 movies", icon: "Compass", requirement: 10 },
+        "night-owl-badge": { name: "Night Owl", description: "View 25 movies", icon: "Moon", requirement: 25 },
+        "binge-watcher": { name: "Binge Watcher", description: "View 50 movies", icon: "Popcorn", requirement: 50 },
+        "curator": { name: "Curator", description: "Add 5 movies to watchlist", icon: "Bookmark", requirement: 5 },
+        "critic": { name: "Critic", description: "Like 5 movies", icon: "Star", requirement: 5 },
+        "connoisseur": { name: "Connoisseur", description: "Like 15 movies", icon: "Award", requirement: 15 },
+        "genre-master": { name: "Genre Master", description: "Explore 15 genres", icon: "Theater", requirement: 15 },
+        "quiz-pro": { name: "Quiz Pro", description: "Complete a quiz", icon: "FileText", requirement: 1 },
+      }
     });
   });
 
   app.get("/api/gamification/stats", (req, res) => {
     res.json({
       stats: {
-        total_movies_discovered: 24,
-        quiz_completed: 2,
-        mood_journeys_taken: 3,
-        favorite_genre: "Sci-Fi",
-        avg_rating_explored: 8.6,
-        watch_time_hours: 48.5
+        movies_viewed: 0,
+        genres_explored: 0,
+        quizzes_completed: 0,
+        searches_made: 0,
+        likes_given: 0,
+        watchlist_size: 0,
+        shares_made: 0,
+        badges_earned: [],
+        streak_days: 0,
+        total_rating: 0,
       }
     });
   });
@@ -403,10 +417,10 @@ async function startServer() {
   app.get("/api/gamification/leaderboard", (req, res) => {
     res.json({
       leaderboard: [
-        { rank: 1, name: "CinemaVirtuoso", points: 2840, badge: "Master Curator", avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80" },
-        { rank: 2, name: "FilmBuff_99", points: 2410, badge: "Nolan Scholar", avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80" },
-        { rank: 3, name: "MovieMindExplorer", points: 1950, badge: "Genre Explorer", avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&auto=format&fit=crop&q=80" },
-        { rank: 4, name: "SciFiVoyager", points: 1620, badge: "Discovery Ace", avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=80" }
+        { rank: 1, name: "CinemaVirtuoso", score: 2840, badges: 5 },
+        { rank: 2, name: "FilmBuff_99", score: 2410, badges: 4 },
+        { rank: 3, name: "MovieMindExplorer", score: 1950, badges: 3 },
+        { rank: 4, name: "SciFiVoyager", score: 1620, badges: 2 }
       ]
     });
   });
@@ -421,8 +435,12 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+    app.use((req, res, next) => {
+      if (req.method === "GET" && !req.path.startsWith("/api")) {
+        res.sendFile(path.join(distPath, "index.html"));
+      } else {
+        next();
+      }
     });
   }
 

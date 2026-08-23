@@ -495,7 +495,7 @@ export const MOVIES_DATABASE: ServerMovie[] = [
     backdrop: "https://image.tmdb.org/t/p/original/sw7mordbZxgITU877yTpZCud90M.jpg",
   },
   {
-    id: "parasite-thriller",
+    id: "memories-of-murder",
     title: "Memories of Murder",
     year: 2003,
     certificate: "Not Rated",

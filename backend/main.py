@@ -36,12 +36,11 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
 DIST_DIR = PROJECT_ROOT / "dist"
-MODEL_PATH = BASE_DIR / "models" / "recommender.pkl"
 MOVIES_JSON_PATH = BASE_DIR / "data" / "movies.json"
 POSTER_CACHE_PATH = BASE_DIR / "data" / "poster_cache.json"
 STREAMING_CACHE_PATH = BASE_DIR / "data" / "streaming_cache.json"
 
-TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "60b1315b3031dc9c8091011a927d17e3")
+TMDB_API_KEY = os.environ.get("TMDB_API_KEY")
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMG_BASE = "https://image.tmdb.org/t/p/w500"
 
@@ -119,7 +118,8 @@ def _tmdb_search(title: str, year: int = 0) -> str:
         return ""
     if year:
         for r in results:
-            r_year = int(str(r.get("release_date", "0000"))[:4] or 0)
+            rd = r.get("release_date") or ""
+            r_year = int(rd[:4]) if rd[:4].isdigit() else 0
             if abs(r_year - year) <= 1:
                 return r.get("poster_path", "") or ""
     return results[0].get("poster_path", "") or ""
@@ -1254,7 +1254,8 @@ def _tmdb_find_movie(title: str, year: int = 0) -> int:
         return 0
     if year:
         for r in results:
-            r_year = int(str(r.get("release_date", "0000"))[:4] or 0)
+            rd = r.get("release_date") or ""
+            r_year = int(rd[:4]) if rd[:4].isdigit() else 0
             if abs(r_year - year) <= 1:
                 return r.get("id", 0)
     return results[0].get("id", 0)
