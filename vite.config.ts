@@ -10,6 +10,7 @@ export default defineConfig({
     },
   },
   server: {
+    open: "/login",
     proxy: {
       "/api": {
         target: "http://localhost:8000",
